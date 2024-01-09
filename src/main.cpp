@@ -18,22 +18,26 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+#include <ArduinoJson.h>
+
 // ############# CONSTANTS ############### //
 #define relayPin 5
 
 // ############# VARIABLES ############### //
 
-const char *SSID = "Morea";          // rede wifi
-const char *PASSWORD = "morea123**"; // senha da rede wifi
+const char *SSID = "Felipe-Network";          // rede wifi
+const char *PASSWORD = "Felipe2020"; // senha da rede wifi
 
-const char *url = "http://192.168.1.37";
+const char *url = "http://192.168.82.73";
 const int nodeId = 1;
+String deviceId;
 char path[512];
 
 // ############### OBJECTS ################# //
 
 WiFiClient client;
 HTTPClient http;
+JsonDocument doc;
 
 void notFound(AsyncWebServerRequest *request)
 {
@@ -52,6 +56,8 @@ void initWiFi()
     delay(100);
     Serial.print(".");
   }
+  
+
   Serial.println();
   Serial.print("Conectado na Rede " + String(SSID) + " | IP => ");
   Serial.println(WiFi.localIP());
@@ -63,11 +69,45 @@ void setup()
 {
   Serial.begin(115200);
 
-  // Pins Setup
-  pinMode(relayPin, OUTPUT);
   
   // Init Wifi And Connect
   initWiFi();
+
+  String mac_address = WiFi.macAddress();
+
+  Serial.println(mac_address);
+
+  sprintf(path, "%s/identify-device", url);
+  String data = "macAddress=" + mac_address;
+
+  Serial.println(data);
+
+  if(http.begin(client, path)){
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+
+    int httpResponseCode = http.POST(data);
+    String payload = http.getString();
+
+    Serial.println(httpResponseCode);
+    Serial.println(payload);
+
+    DeserializationError error = deserializeJson(doc, payload);
+
+    if(error){
+      Serial.println("deserialization error");
+      return;
+    }
+
+    deviceId = doc["id"].as<String>();
+
+    Serial.println(deviceId);
+
+    http.end();
+  }
+
+  // Pins Setup
+  pinMode(relayPin, OUTPUT);
+  
 
   Serial.println();
   Serial.print("ESP IP Address: http://");
