@@ -18,26 +18,34 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// Json Librarie
 #include <ArduinoJson.h>
 
 // ############# CONSTANTS ############### //
-#define relayPin 5
+#define relayPin 14
+#define wifiLedPin 0
+#define failLedPin 5
+#define successLedPin 4
+#define buzzerPin 2
+#define buttonPin 12
 
 // ############# VARIABLES ############### //
 
-const char *SSID = "Felipe-Network";          // rede wifi
-const char *PASSWORD = "Felipe2020"; // senha da rede wifi
+const char *SSID = "Morea-Mobile";  // rede wifi
+const char *PASSWORD = "p@ssw0rd1234**"; // senha da rede wifi
 
-const char *url = "http://192.168.82.73";
-const int nodeId = 1;
+String url = "http://192.168.1.103";
 String deviceId;
-char path[512];
+String apiToken;
+String path;
 
 // ############### OBJECTS ################# //
 
 WiFiClient client;
 HTTPClient http;
 JsonDocument doc;
+
+// ############### FUNCTIONS ################# //
 
 void notFound(AsyncWebServerRequest *request)
 {
@@ -53,11 +61,14 @@ void initWiFi()
   WiFi.begin(SSID, PASSWORD);
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(100);
+    digitalWrite(wifiLedPin, HIGH);
+    delay(50);
     Serial.print(".");
+    digitalWrite(wifiLedPin, LOW);
+    delay(50);
   }
   
-
+  digitalWrite(wifiLedPin, HIGH);
   Serial.println();
   Serial.print("Conectado na Rede " + String(SSID) + " | IP => ");
   Serial.println(WiFi.localIP());
@@ -68,81 +79,136 @@ AsyncWebServer server(80);
 void setup()
 {
   Serial.begin(115200);
-
   
+  // Pins Setup
+  pinMode(relayPin, OUTPUT);
+  pinMode(wifiLedPin, OUTPUT);
+  pinMode(failLedPin, OUTPUT);
+  pinMode(successLedPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(buttonPin, INPUT);
+
+  // Get Mac Address
+  String mac_address = WiFi.macAddress();
+  Serial.println("Endereço Mac: " + mac_address);
+
   // Init Wifi And Connect
   initWiFi();
 
-  String mac_address = WiFi.macAddress();
-
-  Serial.println(mac_address);
-
-  sprintf(path, "%s/identify-device", url);
+  path = url + "/identify-device";
   String data = "macAddress=" + mac_address;
 
-  Serial.println(data);
-
+  //  Sending Mac Address to the Server
   if(http.begin(client, path)){
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
     int httpResponseCode = http.POST(data);
     String payload = http.getString();
 
-    Serial.println(httpResponseCode);
-    Serial.println(payload);
+    if (httpResponseCode < 0){
+      Serial.println("request error - " + httpResponseCode);
+    }
+
+    if (httpResponseCode != HTTP_CODE_OK){
+      Serial.println("Falha no Envio");
+      Serial.println(httpResponseCode);
+    }
 
     DeserializationError error = deserializeJson(doc, payload);
 
     if(error){
-      Serial.println("deserialization error");
+      Serial.println("Deserialization error");
+
+      digitalWrite(failLedPin, HIGH);
+      digitalWrite(successLedPin, HIGH);
+
       return;
     }
 
     deviceId = doc["id"].as<String>();
-
-    Serial.println(deviceId);
+    apiToken = doc["api_token"].as<String>();
+    
+    Serial.println("Device ID: " + deviceId);
+    Serial.println("API Token: " + apiToken);
 
     http.end();
   }
 
-  // Pins Setup
-  pinMode(relayPin, OUTPUT);
-  
-
   Serial.println();
-  Serial.print("ESP IP Address: http://");
-  Serial.println(WiFi.localIP());
+  Serial.print("ESP IP Address: http://" + WiFi.localIP().toString());
 
-  sprintf(path, "%s/receiveIp?nodeId=%d&deviceIp=%s", url, nodeId, WiFi.localIP().toString().c_str());
-  Serial.println(path);
+  path = url + "/get-device-ip";
+  data = "deviceId=" + deviceId + "&deviceIp=" + WiFi.localIP().toString() + "&apiToken=" + apiToken;
+  Serial.println();
 
+  //  Sending Ip Address to the Server
   if (http.begin(client, path)){
-    int httpCode = http.GET();
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
-    if (httpCode < 0){
-      Serial.println("request error - " + httpCode);
+    int httpResponseCode = http.POST(data);
+    String payload = http.getString();
+
+    if (httpResponseCode < 0){
+      Serial.println("request error - " + httpResponseCode);
     }
 
-    if (httpCode != HTTP_CODE_OK){
+    if (httpResponseCode != HTTP_CODE_OK){
       Serial.println("Falha no Envio");
-      Serial.println(httpCode);
+      Serial.println(httpResponseCode);
+    }
+    
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if(error){
+      Serial.println("Deserialization error");
+
+      digitalWrite(failLedPin, HIGH);
+      digitalWrite(successLedPin, HIGH);
+      
+      return;
     }
 
-    String response = http.getString();
-    http.end();
+    String responseMessage = doc["message"].as<String>();
+    Serial.println("Response Message: " + responseMessage);
 
-    Serial.println("Request Response:" + response);
+    http.end();
   }
 
   // Receive an HTTP GET request
   server.on("/open", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", "ok"); 
 
-    digitalWrite(relayPin, HIGH);
-    delay(250);
-    digitalWrite(relayPin, LOW);
+    int paramsNr = request->params();
+    Serial.println();
 
-    Serial.println("received");
+    for (int i = 0; i < paramsNr; i++)
+    {
+      AsyncWebParameter* p = request->getParam(i);
+      Serial.print("Param name: ");
+      Serial.println(p->name());
+      
+      Serial.print("Param value: ");
+      Serial.println(p->value());
+      
+      if(p->name() == "apiToken") {
+        if(p->value() == apiToken) {
+          digitalWrite(successLedPin, HIGH);
+          digitalWrite(relayPin, HIGH);
+          delay(250);
+          digitalWrite(relayPin, LOW);
+          digitalWrite(successLedPin, LOW);
+
+          Serial.println("Opened.");
+          request->send(200, "text/plain", "opened"); 
+        } else {
+          digitalWrite(failLedPin, HIGH);
+          delay(250);
+          digitalWrite(failLedPin, LOW);
+
+          Serial.println("Wrong API Token.");
+          request->send(400, "text/plain", "wrong api token"); 
+        }
+      }
+    }
   });
 
   server.onNotFound(notFound);
@@ -150,5 +216,7 @@ void setup()
 }
 
 void loop(){
-
+  if (WiFi.status() != WL_CONNECTED){
+    initWiFi();
+  }
 }
