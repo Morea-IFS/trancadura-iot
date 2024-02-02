@@ -27,14 +27,13 @@
 #define failLedPin 5
 #define successLedPin 4
 #define buzzerPin 2
-#define buttonPin 12
 
 // ############# VARIABLES ############### //
 
 const char *SSID = "Morea-Mobile";  // rede wifi
 const char *PASSWORD = "p@ssw0rd1234**"; // senha da rede wifi
 
-String url = "http://192.168.1.103";
+String url = "http://trancadura.morea-ifs.org";
 String deviceId;
 String apiToken;
 String path;
@@ -86,7 +85,6 @@ void setup()
   pinMode(failLedPin, OUTPUT);
   pinMode(successLedPin, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
-  pinMode(buttonPin, INPUT);
 
   // Get Mac Address
   String mac_address = WiFi.macAddress();
