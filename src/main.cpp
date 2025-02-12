@@ -1,17 +1,18 @@
 #include <Arduino.h>
 
 // Wifi Librarie
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 
 // HTTP Request Libraries
-#include <ESP8266HTTPClient.h>
-#include <WiFiClientSecureBearSSL.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <stdio.h>
 
 // HTTP Server Libraries
-#include <ESPAsyncTCP.h>
+#include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <SPI.h>
 
 // Display Libraries
 #include <Adafruit_GFX.h>
@@ -21,26 +22,35 @@
 // Json Librarie
 #include <ArduinoJson.h>
 
+//RFID Librarie
+#include <MFRC522.h>
+
 // ############# CONSTANTS ############### //
-#define relayPin 14
-#define wifiLedPin 0
-#define failLedPin 5
-#define successLedPin 4
-#define buzzerPin 2
+#define RST_PIN  22
+#define SS_PIN   5
+#define relayPin 27
+#define wifiLedPin 21
+#define failLedPin 26
+#define successLedPin 25
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+struct Cartao {
+  String id;
+};
 
 // ############# VARIABLES ############### //
 
 // WebSite URL (using HTTP and not HTTPS)
-const uint8_t fingerprint[20] = {0x44, 0x5D, 0x07, 0x68, 0x0F, 0xBF, 0x25, 0x26, 0xE4, 0xB5, 0x04, 0x35, 0x6D, 0x91, 0xAD, 0x96, 0xFE, 0xBF, 0x40, 0x8B}; // Server fingerprint
+const uint8_t fingerprint[20] = {}; // Server fingerprint
 
-const char *SSID = "";     // rede wifi
-const char *PASSWORD = ""; // senha da rede wifi
+const char *SSID = "Morea-Mobile";     // rede wifi
+const char *PASSWORD = "p@ssw0rd1234**"; // senha da rede wifi
 
-String url = "https://url.link";
+String url = "http://trancadura.morea-ifs.org";
 String deviceId;
 String apiToken;
 String path;
-
+String hexid;
 // ############### OBJECTS ################# //
 
 WiFiClient client;
@@ -73,17 +83,86 @@ void initWiFi() {
   Serial.println(WiFi.localIP());
 }
 
+bool checkCard() {
+  return mfrc522.PICC_IsNewCardPresent();
+}
+
+void readCardUID() {
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    Serial.println("Falha na leitura do cartão!");
+    return;
+  }
+
+  Serial.print("UID do Cartão: ");
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    hexid += String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
+    hexid += String(mfrc522.uid.uidByte[i], HEX); 
+    hexid.toUpperCase();
+  }
+  Serial.println(hexid);
+
+  String sendPath = url + "/approximation";
+  String mac_address = WiFi.macAddress();
+  String data = "hexid=" + hexid + "&macaddress=" + mac_address;
+  
+  std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+  client->setInsecure();
+
+  if (http.begin(*client, sendPath)) {
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    int httpResponseCode = http.POST(data);
+    String message = http.getString();
+
+    if (httpResponseCode == HTTP_CODE_OK) {
+      Serial.println("UID enviado com sucesso!");
+      Serial.println("Resposta do Servidor: " + message);
+
+      DeserializationError error = deserializeJson(doc, message);
+      if (error) {
+
+        if (message == "Authorized") {
+          digitalWrite(successLedPin, HIGH);
+          digitalWrite(relayPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(relayPin, LOW);
+          digitalWrite(successLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
+        } else {
+          digitalWrite(failLedPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(failLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
+        }
+      } else {
+        Serial.println("Erro ao processar resposta do servidor.");
+      }
+    } else {
+      Serial.println("Falha ao enviar o UID: " + String(httpResponseCode));
+      digitalWrite(failLedPin, HIGH);
+      delay(5000);
+      digitalWrite(failLedPin, LOW);
+    }
+    http.end();
+  }
+
+
+  hexid = "";
+}
+
 AsyncWebServer server(80);
 
 void setup() {
   Serial.begin(115200);
+  SPI.begin(18, 19, 23, 5);
+  mfrc522.PCD_Init();
 
   // Pins Setup
   pinMode(relayPin, OUTPUT);
   pinMode(wifiLedPin, OUTPUT);
   pinMode(failLedPin, OUTPUT);
   pinMode(successLedPin, OUTPUT);
-  pinMode(buzzerPin, OUTPUT);
 
   // Get Mac Address
   String mac_address = WiFi.macAddress();
@@ -95,8 +174,8 @@ void setup() {
   path = url + "/identify-device";
   String data = "macAddress=" + mac_address;
 
-  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
-  client->setFingerprint(fingerprint);
+  std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+  client->setInsecure();
 
   //  Sending Mac Address to the Server
   if (http.begin(*client, path)) {
@@ -180,7 +259,8 @@ void setup() {
     Serial.println();
 
     for (int i = 0; i < paramsNr; i++) {
-      AsyncWebParameter *p = request->getParam(i);
+      const AsyncWebParameter *p = request->getParam(i);
+
       Serial.print("Param name: ");
       Serial.println(p->name());
 
@@ -217,4 +297,8 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     initWiFi();
   }
+  if (checkCard()) {
+    readCardUID();
+  }
+  delay(500);
 }
