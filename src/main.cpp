@@ -41,12 +41,12 @@ struct Cartao {
 // ############# VARIABLES ############### //
 
 // WebSite URL (using HTTP and not HTTPS)
-const uint8_t fingerprint[20] = {}; // Server fingerprint
+const uint8_t fingerprint[20] = {0x1D, 0x67, 0x1B, 0xAD, 0x54, 0xC8, 0xF5, 0xC2, 0x85, 0xA2, 0x4E, 0x21, 0xEF, 0x9D, 0x4A, 0xF8, 0xCF, 0x01, 0x91, 0xB6}; // Server fingerprint
 
 const char *SSID = "Morea-Mobile";     // rede wifi
 const char *PASSWORD = "p@ssw0rd1234**"; // senha da rede wifi
 
-String url = "http://trancadura.morea-ifs.org";
+String url = "https://trancadura.morea-ifs.org";
 String deviceId;
 String apiToken;
 String path;
@@ -84,10 +84,15 @@ void initWiFi() {
 }
 
 bool checkCard() {
-  return mfrc522.PICC_IsNewCardPresent();
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    mfrc522.PCD_Init(); 
+    return false;
+  }
+  return true;
 }
 
 void readCardUID() {
+  hexid = "";
   if (!mfrc522.PICC_ReadCardSerial()) {
     Serial.println("Falha na leitura do cartão!");
     return;
@@ -96,7 +101,7 @@ void readCardUID() {
   Serial.print("UID do Cartão: ");
   for (byte i = 0; i < mfrc522.uid.size; i++) {
     hexid += String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
-    hexid += String(mfrc522.uid.uidByte[i], HEX); 
+    hexid += String(mfrc522.uid.uidByte[i], HEX);
     hexid.toUpperCase();
   }
   Serial.println(hexid);
@@ -104,7 +109,7 @@ void readCardUID() {
   String sendPath = url + "/approximation";
   String mac_address = WiFi.macAddress();
   String data = "hexid=" + hexid + "&macaddress=" + mac_address;
-  
+
   std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
   client->setInsecure();
 
@@ -146,9 +151,6 @@ void readCardUID() {
     }
     http.end();
   }
-
-
-  hexid = "";
 }
 
 AsyncWebServer server(80);
@@ -271,7 +273,7 @@ void setup() {
         if (p->value() == apiToken) {
           digitalWrite(successLedPin, HIGH);
           digitalWrite(relayPin, HIGH);
-          delay(250);
+          delay(2000);
           digitalWrite(relayPin, LOW);
           digitalWrite(successLedPin, LOW);
 
@@ -299,6 +301,6 @@ void loop() {
   }
   if (checkCard()) {
     readCardUID();
-  }
-  delay(500);
+    delay(1000);
 }
+} 
