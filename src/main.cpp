@@ -1,17 +1,18 @@
 #include <Arduino.h>
 
 // Wifi Librarie
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 
 // HTTP Request Libraries
-#include <ESP8266HTTPClient.h>
-#include <WiFiClientSecureBearSSL.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <stdio.h>
 
 // HTTP Server Libraries
-#include <ESPAsyncTCP.h>
+#include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <SPI.h>
 
 // Display Libraries
 #include <Adafruit_GFX.h>
@@ -21,84 +22,199 @@
 // Json Librarie
 #include <ArduinoJson.h>
 
+// RFID Librarie
+#include <MFRC522.h>
+
+// OTA e Telnet
+#include <ArduinoOTA.h>
+#include <TelnetStream.h>
+
 // ############# CONSTANTS ############### //
-#define relayPin 14
-#define wifiLedPin 0
-#define failLedPin 5
-#define successLedPin 4
-#define buzzerPin 2
+#define RST_PIN  22
+#define SS_PIN   5
+#define relayPin 27
+#define wifiLedPin 21
+#define failLedPin 26
+#define successLedPin 25
+
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+struct Cartao {
+  String id;
+};
 
 // ############# VARIABLES ############### //
 
-// WebSite URL (using HTTP and not HTTPS)
-const uint8_t fingerprint[20] = {0x44, 0x5D, 0x07, 0x68, 0x0F, 0xBF, 0x25, 0x26, 0xE4, 0xB5, 0x04, 0x35, 0x6D, 0x91, 0xAD, 0x96, 0xFE, 0xBF, 0x40, 0x8B}; // Server fingerprint
+const char* OTA_PASSWORD = "";
 
-const char *SSID = "";     // rede wifi
-const char *PASSWORD = ""; // senha da rede wifi
+const uint8_t fingerprint[20] = {0x1D, 0x67, 0x1B, 0xAD, 0x54, 0xC8, 0xF5, 0xC2, 0x85, 0xA2, 0x4E, 0x21, 0xEF, 0x9D, 0x4A, 0xF8, 0xCF, 0x01, 0x91, 0xB6};
 
-String url = "https://url.link";
+const char *SSID = "";
+const char *PASSWORD = "";
+
+String url = "https://trancadura.morea-ifs.org";
 String deviceId;
 String apiToken;
 String path;
-
-// ############### OBJECTS ################# //
+String hexid;
 
 WiFiClient client;
 HTTPClient http;
 JsonDocument doc;
+AsyncWebServer server(80);
 
-// ############### FUNCTIONS ################# //
+// ========= LOG FUNCTION ========= //
+void printLog(const String& message) {
+  Serial.println(message);
+  TelnetStream.println(message);
+}
 
+// ========= OTA ========= //
+void setupOTA() {
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+
+  ArduinoOTA.onStart([]() {
+    printLog("Iniciando OTA...");
+  });
+  ArduinoOTA.onEnd([]() {
+    printLog("\nOTA Finalizado.");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    char buffer[64];
+    sprintf(buffer, "Progresso: %u%%", (progress / (total / 100)));
+    printLog(buffer);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    printLog("Erro OTA: " + String(error));
+  });
+
+  ArduinoOTA.begin();
+  printLog("OTA Pronto.");
+}
+
+// ========= TELNET ========= //
+void setupTelnet() {
+  TelnetStream.begin();
+  printLog("Telnet pronto.");
+}
+
+// ========= WebServer Not Found ========= //
 void notFound(AsyncWebServerRequest *request) {
   request->send(404, "text/plain", "Not found");
 }
 
+// ========= WiFi ========= //
 void initWiFi() {
   delay(10);
-  Serial.println("Conectando-se em: " + String(SSID));
+  printLog("Conectando-se em: " + String(SSID));
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     digitalWrite(wifiLedPin, HIGH);
     delay(50);
-    Serial.print(".");
     digitalWrite(wifiLedPin, LOW);
     delay(50);
+    printLog(".");
   }
 
   digitalWrite(wifiLedPin, HIGH);
-  Serial.println();
-  Serial.print("Conectado na Rede " + String(SSID) + " | IP => ");
-  Serial.println(WiFi.localIP());
+  printLog("\nConectado na Rede " + String(SSID) + " | IP => " + WiFi.localIP().toString());
 }
 
-AsyncWebServer server(80);
+// ========= RFID ========= //
+bool checkCard() {
+  if (!mfrc522.PICC_IsNewCardPresent()) {
+    mfrc522.PCD_Init(); 
+    return false;
+  }
+  return true;
+}
+
+void readCardUID() {
+  hexid = "";
+  if (!mfrc522.PICC_ReadCardSerial()) {
+    printLog("Falha na leitura do cartão!");
+    return;
+  }
+
+  printLog("UID do Cartão: ");
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    hexid += String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
+    hexid += String(mfrc522.uid.uidByte[i], HEX);
+    hexid.toUpperCase();
+  }
+  printLog(hexid);
+  mfrc522.PICC_HaltA();     
+  mfrc522.PCD_StopCrypto1();
+  String sendPath = url + "/approximation";
+  String mac_address = WiFi.macAddress();
+  String data = "hexid=" + hexid + "&macaddress=" + mac_address;
+
+  std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+  client->setInsecure();
+
+  if (http.begin(*client, sendPath)) {
+    http.addHeader("Content-Type", "application/x-www-form-urlencoded");
+    int httpResponseCode = http.POST(data);
+    String message = http.getString();
+
+    if (httpResponseCode == HTTP_CODE_OK) {
+      printLog("UID enviado com sucesso!");
+      printLog("Resposta do Servidor: " + message);
+
+      DeserializationError error = deserializeJson(doc, message);
+      if (error) {
+        if (message == "Authorized") {
+          digitalWrite(successLedPin, HIGH);
+          digitalWrite(relayPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(relayPin, LOW);
+          digitalWrite(successLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
+        } else {
+          digitalWrite(failLedPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(failLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
+        }
+      } else {
+        printLog("Erro ao processar resposta do servidor.");
+      }
+    } else {
+      printLog("Falha ao enviar o UID: " + String(httpResponseCode));
+      digitalWrite(failLedPin, HIGH);
+      delay(5000);
+      digitalWrite(failLedPin, LOW);
+    }
+    http.end();
+  }
+}
 
 void setup() {
   Serial.begin(115200);
+  SPI.begin(18, 19, 23, 5);
+  mfrc522.PCD_Init();
 
-  // Pins Setup
   pinMode(relayPin, OUTPUT);
   pinMode(wifiLedPin, OUTPUT);
   pinMode(failLedPin, OUTPUT);
   pinMode(successLedPin, OUTPUT);
-  pinMode(buzzerPin, OUTPUT);
 
-  // Get Mac Address
   String mac_address = WiFi.macAddress();
-  Serial.println("Endereço Mac: " + mac_address);
+  printLog("Endereço Mac: " + mac_address);
 
-  // Init Wifi And Connect
   initWiFi();
+  setupOTA();
+  setupTelnet();
 
   path = url + "/identify-device";
   String data = "macAddress=" + mac_address;
 
-  std::unique_ptr<BearSSL::WiFiClientSecure> client(new BearSSL::WiFiClientSecure);
-  client->setFingerprint(fingerprint);
+  std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
+  client->setInsecure();
 
-  //  Sending Mac Address to the Server
   if (http.begin(*client, path)) {
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
@@ -106,42 +222,37 @@ void setup() {
     String payload = http.getString();
 
     if (httpResponseCode < 0) {
-      Serial.println("request error - " + httpResponseCode);
+      printLog("request error - " + String(httpResponseCode));
     }
 
     if (httpResponseCode != HTTP_CODE_OK) {
-      Serial.println("Falha no Envio");
-      Serial.println(httpResponseCode);
+      printLog("Falha no Envio");
+      printLog(String(httpResponseCode));
     }
 
     DeserializationError error = deserializeJson(doc, payload);
 
     if (error) {
-      Serial.println("Deserialization error");
-
+      printLog("Deserialization error");
       digitalWrite(failLedPin, HIGH);
       digitalWrite(successLedPin, HIGH);
-
       return;
     }
 
     deviceId = doc["id"].as<String>();
     apiToken = doc["api_token"].as<String>();
 
-    Serial.println("Device ID: " + deviceId);
-    Serial.println("API Token: " + apiToken);
+    printLog("Device ID: " + deviceId);
+    printLog("API Token: " + apiToken);
 
     http.end();
   }
 
-  Serial.println();
-  Serial.print("ESP IP Address: http://" + WiFi.localIP().toString());
+  printLog("ESP IP Address: http://" + WiFi.localIP().toString());
 
   path = url + "/get-device-ip";
   data = "deviceId=" + deviceId + "&deviceIp=" + WiFi.localIP().toString() + "&apiToken=" + apiToken;
-  Serial.println();
 
-  //  Sending Ip Address to the Server
   if (http.begin(*client, path)) {
     http.addHeader("Content-Type", "application/x-www-form-urlencoded");
 
@@ -149,60 +260,55 @@ void setup() {
     String payload = http.getString();
 
     if (httpResponseCode < 0) {
-      Serial.println("request error - " + httpResponseCode);
+      printLog("request error - " + String(httpResponseCode));
     }
 
     if (httpResponseCode != HTTP_CODE_OK) {
-      Serial.println("Falha no Envio");
-      Serial.println(httpResponseCode);
+      printLog("Falha no Envio");
+      printLog(String(httpResponseCode));
     }
 
     DeserializationError error = deserializeJson(doc, payload);
 
     if (error) {
-      Serial.println("Deserialization error");
-
+      printLog("Deserialization error");
       digitalWrite(failLedPin, HIGH);
       digitalWrite(successLedPin, HIGH);
-
       return;
     }
 
     String responseMessage = doc["message"].as<String>();
-    Serial.println("Response Message: " + responseMessage);
+    printLog("Response Message: " + responseMessage);
 
     http.end();
   }
 
-  // Receive an HTTP GET request
   server.on("/open", HTTP_GET, [](AsyncWebServerRequest *request) {
     int paramsNr = request->params();
-    Serial.println();
+    printLog("Requisição recebida via HTTP GET");
 
     for (int i = 0; i < paramsNr; i++) {
-      AsyncWebParameter *p = request->getParam(i);
-      Serial.print("Param name: ");
-      Serial.println(p->name());
+      const AsyncWebParameter *p = request->getParam(i);
 
-      Serial.print("Param value: ");
-      Serial.println(p->value());
+      printLog("Param name: " + p->name());
+      printLog("Param value: " + p->value());
 
       if (p->name() == "apiToken") {
         if (p->value() == apiToken) {
           digitalWrite(successLedPin, HIGH);
           digitalWrite(relayPin, HIGH);
-          delay(250);
+          delay(2000);
           digitalWrite(relayPin, LOW);
           digitalWrite(successLedPin, LOW);
 
-          Serial.println("Opened.");
+          printLog("Opened.");
           request->send(200, "text/plain", "opened");
         } else {
           digitalWrite(failLedPin, HIGH);
           delay(250);
           digitalWrite(failLedPin, LOW);
 
-          Serial.println("Wrong API Token.");
+          printLog("Wrong API Token.");
           request->send(400, "text/plain", "wrong api token");
         }
       }
@@ -214,7 +320,12 @@ void setup() {
 }
 
 void loop() {
+  ArduinoOTA.handle(); // OTA precisa ser chamado no loop
   if (WiFi.status() != WL_CONNECTED) {
     initWiFi();
+  }
+  if (checkCard()) {
+    readCardUID();
+    delay(1000);
   }
 }
