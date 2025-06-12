@@ -14,6 +14,11 @@
 #include <ESPAsyncWebServer.h>
 #include <SPI.h>
 
+// Display Libraries
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <SPI.h>
+
 // Json Librarie
 #include <ArduinoJson.h>
 
@@ -24,19 +29,20 @@
 #include <ArduinoOTA.h>
 #include <TelnetStream.h>
 
+// ############# CONSTANTS ############### //
 #define RST_PIN  22
 #define SS_PIN   5
 #define relayPin 27
 #define wifiLedPin 21
 #define failLedPin 26
 #define successLedPin 25
-#define buttonPin 15
-#define buzzerPin 2
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 struct Cartao {
   String id;
 };
+
+// ############# VARIABLES ############### //
 
 const char* OTA_PASSWORD = "";
 
@@ -56,18 +62,13 @@ HTTPClient http;
 JsonDocument doc;
 AsyncWebServer server(80);
 
-unsigned long ledTimer = 0;
-unsigned long ledDuration = 0;
-bool ledActive = false;
-
-unsigned long buttonLastPressed = 0;
-const unsigned long debounceDelay = 200;
-
+// ========= LOG FUNCTION ========= //
 void printLog(const String& message) {
   Serial.println(message);
   TelnetStream.println(message);
 }
 
+// ========= OTA ========= //
 void setupOTA() {
   ArduinoOTA.setPassword(OTA_PASSWORD);
 
@@ -90,15 +91,18 @@ void setupOTA() {
   printLog("OTA Pronto.");
 }
 
+// ========= TELNET ========= //
 void setupTelnet() {
   TelnetStream.begin();
   printLog("Telnet pronto.");
 }
 
+// ========= WebServer Not Found ========= //
 void notFound(AsyncWebServerRequest *request) {
   request->send(404, "text/plain", "Not found");
 }
 
+// ========= WiFi ========= //
 void initWiFi() {
   delay(10);
   printLog("Conectando-se em: " + String(SSID));
@@ -117,6 +121,7 @@ void initWiFi() {
   printLog("\nConectado na Rede " + String(SSID) + " | IP => " + WiFi.localIP().toString());
 }
 
+// ========= RFID ========= //
 bool checkCard() {
   if (!mfrc522.PICC_IsNewCardPresent()) {
     mfrc522.PCD_Init(); 
@@ -125,73 +130,10 @@ bool checkCard() {
   return true;
 }
 
-void beepSuccess() {
-  for (int i = 0; i < 2; i++) {
-    tone(buzzerPin, 2500); 
-    delay(600);
-    noTone(buzzerPin);
-    delay(50);
-  }
-}
-
-void beepError() {
-  for (int i = 0; i < 2; i++) {
-    tone(buzzerPin, 250);  
-    delay(800);
-    noTone(buzzerPin);
-    delay(50);
-;
-  }
-}
-
-void beepDenied() {
-  for (int i = 0; i < 5; i++) {
-    tone(buzzerPin, 400);  
-    delay(80);
-    noTone(buzzerPin);
-    delay(80);
-  }
-}
-
-void activateSuccessLed() {
-  digitalWrite(successLedPin, HIGH);
-  digitalWrite(relayPin, HIGH);
-  digitalWrite(wifiLedPin, LOW);
-  beepSuccess();
-  ledTimer = millis();
-  ledDuration = 3000;
-  ledActive = true;
-}
-
-void activateFailLed() {
-  digitalWrite(failLedPin, HIGH);
-  digitalWrite(wifiLedPin, LOW);
-  beepDenied(); 
-  ledTimer = millis();
-  ledDuration = 2000;
-  ledActive = true;
-}
-
-void handleLedTimer() {
-  if (ledActive && millis() - ledTimer >= ledDuration) {
-    digitalWrite(successLedPin, LOW);
-    digitalWrite(failLedPin, LOW);
-    digitalWrite(relayPin, LOW);
-    digitalWrite(wifiLedPin, HIGH);
-    ledActive = false;
-  }
-}
-
 void readCardUID() {
   hexid = "";
   if (!mfrc522.PICC_ReadCardSerial()) {
     printLog("Falha na leitura do cartão!");
-    digitalWrite(failLedPin, HIGH);
-    digitalWrite(wifiLedPin, LOW);
-    beepError(); 
-    ledTimer = millis();
-    ledDuration = 800;
-    ledActive = true;
     return;
   }
 
@@ -223,16 +165,28 @@ void readCardUID() {
       DeserializationError error = deserializeJson(doc, message);
       if (error) {
         if (message == "Authorized") {
-          activateSuccessLed();
+          digitalWrite(successLedPin, HIGH);
+          digitalWrite(relayPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(relayPin, LOW);
+          digitalWrite(successLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
         } else {
-          activateFailLed();
+          digitalWrite(failLedPin, HIGH);
+          digitalWrite(wifiLedPin, LOW);
+          delay(5000);
+          digitalWrite(failLedPin, LOW);
+          digitalWrite(wifiLedPin, HIGH);
         }
       } else {
         printLog("Erro ao processar resposta do servidor.");
       }
     } else {
       printLog("Falha ao enviar o UID: " + String(httpResponseCode));
-      activateFailLed();
+      digitalWrite(failLedPin, HIGH);
+      delay(5000);
+      digitalWrite(failLedPin, LOW);
     }
     http.end();
   }
@@ -247,8 +201,6 @@ void setup() {
   pinMode(wifiLedPin, OUTPUT);
   pinMode(failLedPin, OUTPUT);
   pinMode(successLedPin, OUTPUT);
-  pinMode(buttonPin, INPUT_PULLUP); 
-  pinMode(buzzerPin, OUTPUT);     
 
   String mac_address = WiFi.macAddress();
   printLog("Endereço Mac: " + mac_address);
@@ -343,139 +295,37 @@ void setup() {
 
       if (p->name() == "apiToken") {
         if (p->value() == apiToken) {
-          activateSuccessLed();
+          digitalWrite(successLedPin, HIGH);
+          digitalWrite(relayPin, HIGH);
+          delay(2000);
+          digitalWrite(relayPin, LOW);
+          digitalWrite(successLedPin, LOW);
+
           printLog("Opened.");
           request->send(200, "text/plain", "opened");
         } else {
           digitalWrite(failLedPin, HIGH);
-          beepDenied(); 
           delay(250);
           digitalWrite(failLedPin, LOW);
+
           printLog("Wrong API Token.");
           request->send(400, "text/plain", "wrong api token");
         }
       }
     }
   });
-  server.on("/hexid", HTTP_GET, [](AsyncWebServerRequest *request) {
-    printLog("Requisição recebida via /hexid");
 
-    bool validToken = false;
-    int paramsNr = request->params();
-    for (int i = 0; i < paramsNr; i++) {
-      const AsyncWebParameter *p = request->getParam(i);
-      if (p->name() == "apiToken" && p->value() == apiToken) {
-        validToken = true;
-        break;
-      }
-    }
-
-    if (!validToken) {
-      printLog("Token inválido.");
-      digitalWrite(failLedPin, HIGH);
-      beepDenied();
-      delay(250);
-      digitalWrite(failLedPin, LOW);
-      request->send(400, "text/plain", "wrong api token");
-      return;
-    }
-
-    request->send(200, "text/plain", "Aguardando aproximação do cartão...");
-    printLog("Token válido. Aguardando cartão por 15 segundos...");
-
-    unsigned long startTime = millis();
-    bool cardRead = false;
-    bool ledState = false;
-    unsigned long lastBlink = 0;
-
-    while (millis() - startTime < 15000 && !cardRead) {
-      if (millis() - lastBlink >= 500) {
-        ledState = !ledState;
-        digitalWrite(successLedPin, ledState ? HIGH : LOW);
-        lastBlink = millis();
-      }
-
-      if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-        String hexid = "";
-        printLog("UID do Cartão: ");
-        for (byte i = 0; i < mfrc522.uid.size; i++) {
-          hexid += String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : "");
-          hexid += String(mfrc522.uid.uidByte[i], HEX);
-        }
-        hexid.toUpperCase();
-        printLog(hexid);
-
-        mfrc522.PICC_HaltA();
-        mfrc522.PCD_StopCrypto1();
-
-
-        String sendPath = url + "/newcard"; 
-        String mac_address = WiFi.macAddress();
-        String data = "hexid=" + hexid + "&macaddress=" + mac_address;
-
-        std::unique_ptr<WiFiClientSecure> client(new WiFiClientSecure);
-        client->setInsecure();
-
-        if (http.begin(*client, sendPath)) {
-          http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-          int httpResponseCode = http.POST(data);
-          String message = http.getString();
-
-          if (httpResponseCode == HTTP_CODE_OK) {
-            printLog("UID enviado com sucesso!");
-            printLog("Resposta do Servidor: " + message);
-
-            DeserializationError error = deserializeJson(doc, message);
-            if (error) {
-              if (message == "recepte") {
-                activateSuccessLed();
-              } else {
-                activateFailLed();
-              }
-            } else {
-              printLog("Erro ao processar resposta do servidor.");
-              activateFailLed();
-            }
-          } else {
-            printLog("Falha ao enviar o UID: " + String(httpResponseCode));
-            activateFailLed();
-          }
-          http.end();
-        }
-
-        cardRead = true;
-      }
-
-      delay(10);
-    }
-
- 
-    digitalWrite(successLedPin, LOW);
-
-    if (!cardRead) {
-      printLog("Tempo esgotado. Nenhum cartão foi aproximado.");
-    }
-  });
   server.onNotFound(notFound);
   server.begin();
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  ArduinoOTA.handle(); // OTA precisa ser chamado no loop
   if (WiFi.status() != WL_CONNECTED) {
     initWiFi();
   }
   if (checkCard()) {
     readCardUID();
+    delay(1000);
   }
-
-  if (digitalRead(buttonPin) == LOW) {
-    if (millis() - buttonLastPressed > debounceDelay) {
-      activateSuccessLed();
-      printLog("Botão pressionado: porta aberta.");
-      buttonLastPressed = millis();
-    }
-  }
-
-  handleLedTimer();
 }
