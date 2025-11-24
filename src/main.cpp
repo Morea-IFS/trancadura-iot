@@ -39,12 +39,12 @@
 MFRC522 mfrc522(SS_PIN, RST_PIN);
 
 // OTA Config
-const char* OTAhostname = "Lab-Morea-Tranca";
-const char* OTA_PASSWORD = "total123**";
+const char* OTAhostname = "";
+const char* OTA_PASSWORD = "";
 
 // WiFi Config
-const char *SSID = "Morea-Mobile";
-const char *PASSWORD = "p@ssw0rd1234**";
+const char *SSID = "";
+const char *PASSWORD = "";
 
 // Server Config
 String url = "https://trancadura.morea-ifs.org";  
@@ -303,7 +303,7 @@ void readCardUID() {
           String name = "Visitante";
           int idx = message.indexOf("?first_name=");
           if (idx != -1) {
-            name = message.substring(idx + 12);  // pega só o nome
+            name = message.substring(idx + 12); 
           }
 
           showSuccess(name);
@@ -460,7 +460,7 @@ void setup() {
       printLog("Requisição recebida via HTTP GET");
 
       bool validToken = false;
-      String name = "Visitante";  // valor padrão
+      String name = "Visitante";  
 
       for (int i = 0; i < paramsNr; i++) {
         const AsyncWebParameter *p = request->getParam(i);
@@ -539,3 +539,4 @@ void loop() {
 
   processCardReadMode();
 }
+
